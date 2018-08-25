@@ -1,0 +1,247 @@
+---
+title: "Practical Machine Learning - Course Project"
+author: "Jean Dos Santos"
+subtitle: Coursera Data Science Specialization
+output:
+  html_document:
+    code_folding: show
+    df_print: paged
+    highlight: tango
+    number_sections: yes
+    rows.print: 10
+    theme: cerulean
+    toc: yes
+    toc_depth: 3
+    toc_float:
+      collapsed: yes
+      smooth_scroll: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '3'
+  word_document:
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, error = FALSE, warning = FALSE, comment = NA, fig.align = 'center')
+options(scipen=3, digits = 5)
+```
+
+# Introduction
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. 
+
+One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, we will use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. 
+
+More information is available through [this link](http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har) (see the section on the Weight Lifting Exercise Dataset).
+
+***
+
+# Objective
+
+The goal of this project is to predict the manner in which the exercise was done among one of the five classes. This is the "classe" variable in the training set. 
+
+***
+
+# Import Data
+
+Use the `read_csv` function from `readr` to import the csv files.
+
+```{r message=FALSE, warning=FALSE, cache=TRUE}
+# rm(list = ls())
+library(readr)
+
+# Import training and testing set
+training <- read_csv(file = "pml-training.csv", na = c("NA", "#DIV/0!", ""), progress = FALSE)
+testing <- read_csv(file = "pml-testing.csv", na = c("NA", "#DIV/0!", ""), progress = FALSE)
+```
+***
+
+# Process data
+
+Remove unnecessary variables (User identification, time stamps and case numbers).
+
+```{r message=FALSE, warning=FALSE, cache=TRUE}
+library(tidyverse)
+# Remove unnecessary variables
+training <- training %>% 
+  select(-X1, -user_name, -raw_timestamp_part_1, -raw_timestamp_part_2, -cvtd_timestamp, -new_window, -num_window)
+
+testing <- testing %>% 
+  select(-X1, -user_name, -raw_timestamp_part_1, -raw_timestamp_part_2, -cvtd_timestamp, -new_window, -num_window)
+
+# Convert all but classe variable to numeric variables
+training <- data.frame(classe = training$classe, apply(training[, 1:ncol(training)-1], MARGIN = 2, FUN = as.numeric))
+testing <- data.frame(Problem_id = testing$problem_id, apply(testing[, 1:ncol(testing)-1], MARGIN = 2, FUN = as.numeric))
+```
+
+Print summary statistics of training set.
+
+```{r cache=TRUE}
+training %>%
+  select(-classe) %>% 
+  gather(key = Parameter, value = Value) %>% 
+  group_by(Parameter) %>% 
+  summarise(Mean = round(mean(Value, na.rm = TRUE), 2),
+            SD = round(sd(Value, na.rm = TRUE), 2),
+            Min = round(min(Value, na.rm = TRUE), 2),
+            Max = round(max(Value, na.rm = TRUE), 2),
+            `% NA` = round(sum(is.na(Value))/n()*100, 2)
+            )
+
+```
+
+Based on the table above the values of the parameters included have different means and standard deviations. There are also several variables that have moslty `NA` values.
+
+We can test if our predictive models are able to predict the classe by just including variables that have no or almost no `NA`.
+
+```{r message=FALSE, warning=FALSE, error=FALSE, cache=TRUE}
+NA_DF <- data.frame(Variable = names(training), `Percentage NA` = colMeans(is.na(training))*100, row.names = NULL)
+
+NA_DF %>% 
+  ggplot(mapping = aes(x = Variable, y = 1, fill = Percentage.NA)) +
+    geom_tile() +
+    # coord_flip() + 
+    scale_fill_gradient2() +
+    theme_bw() +
+    labs(title = "Percentage of NA values for variables in training set", fill = "% NA") +
+    theme(panel.grid = element_blank(), aspect.ratio = 0.5, axis.text.x = element_blank(), axis.text.y = element_blank(), axis.ticks = element_blank(), axis.title.y = element_blank(), axis.ticks.y = element_blank(), axis.title.x = element_blank(), axis.ticks.x = element_blank())
+
+```
+
+Based on the plot above there are several variables that have mostly or exclusively `NA` values.
+
+We will remove variables with mostly `NA` values:
+
+```{r, cache=TRUE}
+# Remove columns with exclusively NA values
+training <- training[, !apply(X = is.na(training), MARGIN = 2, FUN = all)]
+
+# Remove variables with more than 95% of rows are NA
+training <- training[, colMeans(is.na(training)) < 0.95]
+
+# Remove the same columns in the test set
+testing <- testing[, names(training)[-1]]
+```
+
+Based on the plot above there are several features that have no predictive value since they are populated mostly by `NA` values. 
+
+***
+
+# Exploratory Data Analysis
+
+We will scale and centre the values of all parameters and plot their values.
+
+```{r message=FALSE, warning=FALSE, cache=TRUE}
+library(tidyverse)
+options(scipen = 99, digits = 3)
+
+scaled_training <- data.frame(classe = training$classe, apply(training[, -1], MARGIN = 2, FUN = scale, center = TRUE, scale = TRUE))
+
+scaled_training %>% 
+  gather(key = Parameter, value = Value, -classe) %>% 
+  group_by(Parameter = factor(Parameter), classe) %>% 
+  summarise(Average = mean(Value, na.rm = TRUE) # ,
+            # SD = round(sd(Value, na.rm = TRUE), 2),
+            # Min = min(Value, na.rm = TRUE),
+            # Max = max(Value, na.rm = TRUE)
+            ) %>% 
+  ggplot(mapping = aes(x = Parameter, y = 1, fill = Average)) +
+    geom_tile() +
+    facet_grid(classe~.) + 
+    scale_fill_gradient2() +
+    labs(title = "Average Values of Selected Parameters for Each Classe in the Training Set", subtitle = "All parameters were scaled and centered.") +
+    theme_bw() +
+    theme(axis.text.x = element_blank(), axis.text.y = element_blank(), axis.ticks = element_blank(), axis.title.y = element_blank(), axis.ticks.y = element_blank(), axis.ticks.x = element_blank())
+
+```
+
+Based on the plot above there seems to be significant differences between the various classes in one or more variables.
+
+***
+
+# Modelling
+
+Model training using k-fold cross-validation with 5 folds repeated 3 times. Accuracy will be used to select the optimal model.
+
+In order to reduce computing time, we will use parallel processing using the `parallel` package.
+
+```{r cache=TRUE}
+N_folds <- 5 # number of folds
+N_repetitions <- 3 # number of partitions to create
+
+# # install.packages("doParallel")
+library(caret); library(parallel); library(doParallel)
+cluster <- makeCluster(detectCores() - 2) # number of cores, convention to leave 1 core for OS
+registerDoParallel(cluster) # register the parallel processing
+set.seed(1) # set seed for reproducibility
+
+# Training Options
+control_options <- trainControl(method = "cv", # resampling method
+                                          number = N_folds, # number of folds
+                                          repeats = N_repetitions, # number of repetitions
+                                          # search = "grid", 
+                                          allowParallel = TRUE # allow parallel processing
+                                )
+
+# Train random forest model
+rf_model <- train(classe ~.,
+                  method = "rf", # use random forests
+                  data = training, 
+                  # preProcess = c("knnImpute", "center", "scale"),
+                  na.action = "na.omit",
+                  trControl = control_options)
+
+stopCluster(cluster) # shut down the cluster 
+registerDoSEQ() #  force R to return to single threaded processing
+
+# Save model in disk (optional)
+saveRDS(object = rf_model, file = "rf_model.RSD")
+```
+
+***
+
+# Model Evaluation
+
+## Model Statistics
+
+We can evaluate the obtained model by printing summary statistics and the confusion matrix. Since we repeated the process `r N_repetitions` times we obtain standard deviations for both the accuracy and Kappa.
+
+```{r cache=TRUE}
+rf_model$results
+```
+
+Based on the table above the optimal model was obtained with `mtry`=2 (i.e. 2 predictors are randomly selected at each node). The obtained accuracy was 0.995 and a Kappa value of 0.993.
+
+## Confusion Matrix
+
+```{r cache=TRUE}
+confusionMatrix(rf_model)
+```
+
+Based on the confusion matrix above, the majority of the errors occured between classe C and D, classe A and B, and classe B and C. Classe E correctly identied every single instance.
+
+## Variable Importance
+
+We can use the `varImp` function from the `caret` package to calculate and plot variable importance
+
+```{r fig.asp=1.2}
+plot(varImp(rf_model), main = "Variable importance of random forest model to classify movement class")
+```
+
+
+***
+
+# Model Predictions
+
+We can now use the random forest model obtained to make predictions on the testing set:
+
+```{r cache=TRUE}
+data.frame(ID = 1:nrow(testing), Prediction = predict(object = rf_model, newdata = testing))
+```
+
+***
+
+# Reference
+
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. [**Qualitative Activity Recognition of Weight Lifting Exercises**](https://web.archive.org/web/20170519033209/http://groupware.les.inf.puc-rio.br:80/public/papers/2013.Velloso.QAR-WLE.pdf). Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013. 
